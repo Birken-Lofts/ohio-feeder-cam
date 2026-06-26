@@ -148,14 +148,16 @@ deliberate daily recycle. A healthcheck `ffprobe`s the camera every 60s.
 
 ```bash
 docker compose logs -f                 # follow logs
-docker compose restart camera-restream # apply .env changes (no rebuild needed)
-docker compose up -d                    # recreate after editing docker-compose.yml
+docker compose restart camera-restream # apply overlay_render.py / assets edits
+docker compose up -d                    # apply .env or docker-compose.yml changes (recreates)
 docker compose up -d --build            # rebuild after editing the Dockerfile
 docker compose down                     # stop the stream
 ```
 
 `overlay_render.py` and `assets/` are bind-mounted read-only, so edits to the
-overlay take effect on `docker compose restart` — no image rebuild required.
+overlay take effect on `docker compose restart`. **`.env` changes need
+`docker compose up -d`** — `restart` reuses the container's existing
+environment and won't pick them up.
 
 ## Preview the overlay locally (macOS, no Docker)
 
