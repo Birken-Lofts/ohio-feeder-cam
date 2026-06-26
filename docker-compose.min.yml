@@ -1,0 +1,25 @@
+# Minimal validation relay: camera RTSP -> copy -> Restream (no overlay, no re-encode).
+# Run with:  docker compose -f docker-compose.min.yml up -d   (reads the same .env)
+services:
+  relay-test:
+    image: jrottenberg/ffmpeg:7.0-alpine
+    container_name: relay-test
+    restart: unless-stopped
+    env_file: .env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          echo "[$$(date '+%F %T')] starting copy relay";
+          ffmpeg -hide_banner -loglevel info -stats \
+            -rtsp_transport tcp -fflags +genpts \
+            -i "rtsp://$$CAM_USER:$$CAM_PASS@$$CAM_IP$$CAM_PATH" \
+            -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 \
+            -map 0:v:0 -map 1:a:0 \
+            -c:v copy -c:a aac -b:a 128k -ar 44100 \
+            -f flv "$$RESTREAM_URL/$$RESTREAM_KEY";
+          echo "[$$(date '+%F %T')] exited ($$?). Retry in 10s."; sleep 10;
+        done
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

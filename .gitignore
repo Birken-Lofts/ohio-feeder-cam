@@ -1,0 +1,24 @@
+# Secrets / credentials — NEVER commit these
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# Local logo/font art (drop-in assets are environment-specific; keep placeholders only)
+assets/property_logo.png
+assets/*.ttf
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
