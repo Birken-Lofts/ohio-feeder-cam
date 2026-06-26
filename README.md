@@ -55,6 +55,7 @@ docker compose logs -f
 | `docker-compose.min.yml` | Minimal copy relay (camera → Restream, no overlay, no re-encode). For validation. |
 | `Dockerfile` | Image for the full pipeline (ffmpeg + Python + Pillow + DejaVu fonts). |
 | `overlay_render.py` | The overlay renderer — your canvas. Renders a vertical panel and streams PNG frames to ffmpeg. |
+| `preview.sh` | Render one overlay frame locally on macOS (no Docker) and open it. |
 | `.env.example` | Template for all settings/credentials. Copy to `.env` (gitignored). |
 | `assets/` | Logos (`construction_logo.png`; add your own `property_logo.png`) and optional brand `.ttf` fonts. |
 
@@ -78,13 +79,21 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `RESTREAM_URL` | e.g. `rtmps://live.restream.io:1937/live` |
 | `RESTREAM_KEY` | Channel stream key. Use the channel's **persistent** RTMP key for an always-on feed — a key containing `_event` is a temporary Event key. |
 
-**WeatherLink Live (overlay data)**
+**Weather data (overlay)**
+
+The renderer pulls live conditions from one of two sources. WeatherLink takes
+priority; if `WLL_HOST` is blank it falls back to Open-Meteo, so the switch back
+to the local station is automatic once it's installed.
 
 | Var | Description |
 |-----|-------------|
-| `WLL_HOST` | WeatherLink Live's LAN IP. If unset/unreachable, the overlay still runs and shows `--`. |
+| `WLL_HOST` | Davis WeatherLink Live's LAN IP (preferred source). Leave blank until installed. |
 | `WLL_PORT` | Default `80`. |
+| `WX_LAT` / `WX_LON` | Camera location in decimal degrees. Used for the free [Open-Meteo](https://open-meteo.com) fallback (no API key) when `WLL_HOST` is blank. |
 | `POLL_SECONDS` | How often to re-fetch weather data (default `30`). |
+
+If neither source is configured (or both are unreachable), the panel still
+renders and shows `--` for the affected values.
 
 **Encode**
 
@@ -147,6 +156,19 @@ docker compose down                     # stop the stream
 
 `overlay_render.py` and `assets/` are bind-mounted read-only, so edits to the
 overlay take effect on `docker compose restart` — no image rebuild required.
+
+## Preview the overlay locally (macOS, no Docker)
+
+Iterate on the panel design without touching the live stream:
+
+```bash
+./preview.sh        # renders one frame to preview.png and opens it
+```
+
+First run creates a `.venv/` and installs Pillow. The script reads look +
+location settings from `.env`, overrides the fonts/logo paths for macOS, pulls
+live weather (WeatherLink or Open-Meteo, same as the stream), and writes
+`preview.png`. Edit `overlay_render.py` and re-run to see changes.
 
 ## Logos & fonts
 

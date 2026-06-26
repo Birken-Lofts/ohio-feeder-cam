@@ -37,6 +37,19 @@ WLL_HOST = env("WLL_HOST")
 WLL_PORT = env("WLL_PORT", "80")
 WLL_URL  = f"http://{WLL_HOST}:{WLL_PORT}/v1/current_conditions" if WLL_HOST else None
 
+# Free fallback data source (Open-Meteo, no API key) used when WLL_HOST is unset.
+# Set WX_LAT/WX_LON to the camera's location. WeatherLink takes priority once
+# WLL_HOST is configured, so the switch back to the local station is automatic.
+WX_LAT = env("WX_LAT")
+WX_LON = env("WX_LON")
+OPENMETEO_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    f"?latitude={WX_LAT}&longitude={WX_LON}"
+    "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
+    "dew_point_2m,wind_speed_10m,wind_direction_10m,pressure_msl"
+    "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+) if (WX_LAT and WX_LON) else None
+
 PROP_NAME = env("PROP_NAME", "Your Property")
 PROP_URL  = env("PROP_URL", "yourproperty.com")
 
@@ -66,18 +79,38 @@ def compass(deg):
 _last = {"temp": None, "hum": None, "dew": None, "wind": None, "wdir": None,
          "baro": None, "hidx": None, "wchill": None}
 
-def fetch_values():
-    with urllib.request.urlopen(WLL_URL, timeout=10) as r:
-        doc = json.loads(r.read().decode())
+def _get_json(url):
+    with urllib.request.urlopen(url, timeout=10) as r:
+        return json.loads(r.read().decode())
+
+def fetch_wll():
+    """Local Davis WeatherLink Live (preferred source)."""
+    doc = _get_json(WLL_URL)
     conds = (doc.get("data") or {}).get("conditions") or []
     iss = next((c for c in conds if c.get("data_structure_type") == 1), {})
     bar = next((c for c in conds if c.get("data_structure_type") == 3), {})
-    vals = {
+    return {
         "temp": iss.get("temp"), "hum": iss.get("hum"), "dew": iss.get("dew_point"),
         "wind": iss.get("wind_speed_last"), "wdir": iss.get("wind_dir_last"),
         "baro": bar.get("bar_sea_level"),
         "hidx": iss.get("heat_index"), "wchill": iss.get("wind_chill"),
     }
+
+def fetch_openmeteo():
+    """Free, keyless fallback. apparent_temperature already blends heat index /
+    wind chill, so it maps to whichever 'feels like' branch render uses."""
+    cur = (_get_json(OPENMETEO_URL).get("current") or {})
+    feels = cur.get("apparent_temperature")
+    return {
+        "temp": cur.get("temperature_2m"), "hum": cur.get("relative_humidity_2m"),
+        "dew": cur.get("dew_point_2m"),
+        "wind": cur.get("wind_speed_10m"), "wdir": cur.get("wind_direction_10m"),
+        "baro": cur.get("pressure_msl"),
+        "hidx": feels, "wchill": feels,
+    }
+
+def fetch_values():
+    vals = fetch_wll() if WLL_URL else fetch_openmeteo()
     for k, v in vals.items():
         if v is not None:
             _last[k] = v          # keep last-good readings on partial/failed polls
@@ -185,7 +218,7 @@ _state = {"png": None}
 def updater():
     while True:
         try:
-            vals = fetch_values() if WLL_URL else dict(_last)
+            vals = fetch_values() if (WLL_URL or OPENMETEO_URL) else dict(_last)
             _state["png"] = encode_png(render_overlay(vals))
         except Exception as e:
             sys.stderr.write(f"[overlay] render error: {e}\n"); sys.stderr.flush()
@@ -194,8 +227,12 @@ def updater():
         time.sleep(POLL)
 
 def main():
-    if not WLL_HOST:
-        sys.stderr.write("[overlay] WLL_HOST not set\n")
+    if WLL_URL:
+        sys.stderr.write(f"[overlay] weather source: WeatherLink Live ({WLL_HOST})\n")
+    elif OPENMETEO_URL:
+        sys.stderr.write(f"[overlay] weather source: Open-Meteo ({WX_LAT},{WX_LON})\n")
+    else:
+        sys.stderr.write("[overlay] no weather source set (WLL_HOST or WX_LAT/WX_LON); showing --\n")
     _state["png"] = encode_png(render_overlay(dict(_last)))   # initial frame before streaming
     threading.Thread(target=updater, daemon=True).start()
     out = sys.stdout.buffer
