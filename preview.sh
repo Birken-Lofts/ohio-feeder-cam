@@ -33,6 +33,7 @@ done
 export FONT_BOLD="/System/Library/Fonts/Supplemental/Arial Bold.ttf"
 export FONT_REG="/System/Library/Fonts/Supplemental/Arial.ttf"
 export FONT_COND="/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf"
+export FONT_SERIF="/System/Library/Fonts/Supplemental/Georgia Bold.ttf"
 export CONSTRUCTION_LOGO="assets/construction_logo.png"
 export PROPERTY_LOGO="assets/property_logo.png"
 

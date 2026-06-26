@@ -181,8 +181,10 @@ Drop files in `assets/` and point the env vars at them:
 - Brand fonts: drop a `.ttf` and set e.g. `FONT_BOLD=/app/assets/YourFont-Bold.ttf`
 
 Transparent-background PNGs work best (export SVGs to PNG first). The renderer
-scales each logo to fit its slot; missing files fall back to a dashed
-placeholder box so the stream still runs.
+scales each logo to fit its slot. If `construction_logo.png` is missing it falls
+back to a dashed placeholder box; if `property_logo.png` is missing it renders
+`PROP_BRAND` (default `PROP_NAME`) as a serif wordmark — one word per line —
+using `FONT_SERIF`. So the stream looks finished even before you have art.
 
 ## Troubleshooting
 

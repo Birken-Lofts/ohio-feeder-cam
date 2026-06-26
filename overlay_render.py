@@ -55,11 +55,16 @@ PROP_URL  = env("PROP_URL", "yourproperty.com")
 
 CONSTRUCTION_LOGO = env("CONSTRUCTION_LOGO", "/app/assets/construction_logo.png")
 PROPERTY_LOGO     = env("PROPERTY_LOGO",     "/app/assets/property_logo.png")
+# When no PROPERTY_LOGO image exists, the property slot renders this text as a
+# serif wordmark instead. Words are stacked on separate lines (e.g. "Birken
+# Lofts" -> BIRKEN / LOFTS). Defaults to PROP_NAME.
+PROP_BRAND = env("PROP_BRAND", PROP_NAME)
 
 # fonts (drop custom .ttf in ./assets and point these at them for brand type)
-FONT_BOLD = env("FONT_BOLD", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
-FONT_REG  = env("FONT_REG",  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-FONT_COND = env("FONT_COND", "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf")
+FONT_BOLD  = env("FONT_BOLD",  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+FONT_REG   = env("FONT_REG",   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+FONT_COND  = env("FONT_COND",  "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf")
+FONT_SERIF = env("FONT_SERIF", "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf")
 
 # ---- EDIT THESE: brand palette (RGB) -------------------------------------- #
 BAR_RGB    = tuple(int(x) for x in env("BAR_RGB",    "13,27,42").split(","))   # panel
@@ -137,6 +142,26 @@ def paste_logo(base, logo, box):
     cy = (by0 + by1) // 2 - logo.height // 2
     base.alpha_composite(logo, (cx, cy))
 
+def wordmark(d, box, text, font_path=FONT_SERIF, fill=WHITE, cap=58):
+    """Render `text` as a centered serif wordmark inside `box`, one word per
+    line. Auto-shrinks to fit the box width. Used when no logo image exists."""
+    bx0, by0, bx1, by1 = box
+    cx = (bx0 + bx1) // 2; cy = (by0 + by1) // 2
+    lines = text.upper().split() or ["LOGO"]
+    max_w = (bx1 - bx0)
+    size = cap
+    while size > 14:
+        f = F(font_path, size)
+        if max(d.textlength(ln, font=f) for ln in lines) <= max_w:
+            break
+        size -= 2
+    f = F(font_path, size)
+    line_h = size * 1.06
+    y = cy - line_h * (len(lines) - 1) / 2
+    for ln in lines:
+        d.text((cx, y), ln, font=f, fill=fill, anchor="mm")
+        y += line_h
+
 # ------------------------------------------------------------ render canvas ---
 # Designed on a 1920x1080 grid; resized to WIDTH/HEIGHT at the end if different.
 def render_overlay(v):
@@ -198,11 +223,11 @@ def render_overlay(v):
 
     hr(bot)
 
-    # property marketing site (logo over url, bottom)
+    # property brand (logo image if present, else serif wordmark) over the url
     pbox = [cx - 100, 850, cx + 100, 978]
     plogo = load_logo(PROPERTY_LOGO, pbox[2]-pbox[0]-16, pbox[3]-pbox[1]-12)
     if plogo: paste_logo(ov, plogo, pbox)
-    else:     placeholder(d, pbox, "LOGO")
+    else:     wordmark(d, [x0 + pad, 858, x1 - pad, 970], PROP_BRAND)
     d.text((cx, 1014), PROP_URL, font=bold(22), fill=ACCENT_RGB, anchor="mm")
 
     if (WIDTH, HEIGHT) != (1920, 1080):
