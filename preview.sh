@@ -24,10 +24,13 @@ envget() {
   grep -E "^$1=" .env 2>/dev/null | head -1 | sed -E "s/^$1=//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//" || true
 }
 for k in WLL_HOST WLL_PORT WX_LAT WX_LON PROP_NAME PROP_URL \
-         BAR_RGB ACCENT_RGB BAR_ALPHA PANEL_W PANEL_SIDE WIDTH HEIGHT TZ; do
+         BAR_RGB ACCENT_RGB BAR_ALPHA PANEL_W PANEL_SIDE WIDTH HEIGHT TZ \
+         DIR_A_LABEL DIR_B_LABEL; do
   v="$(envget "$k")"
   if [ -n "$v" ]; then export "$k=$v"; fi
 done
+# Native preview reads counts from the repo-local data/ dir (container uses /app/data)
+export COUNTS_FILE="${COUNTS_FILE:-data/counts.json}"
 
 # 3. macOS overrides: fonts (Linux DejaVu paths don't exist here) + local asset paths
 export FONT_BOLD="/System/Library/Fonts/Supplemental/Arial Bold.ttf"
