@@ -223,58 +223,69 @@ def render_overlay(v):
         return f"{x:.{dp}f}" if dp else f"{round(x)}"
     def hr(yy): d.line([(x0 + pad, yy), (x1 - pad, yy)], fill=WHITE + (40,), width=2)
 
-    # clock (LIVE removed)
-    d.text((cx, y0 + 34), datetime.datetime.now().strftime("%a %-I:%M %p").upper(),
+    # The panel holds four evenly-divided sections (the 3F logo moved to the
+    # bottom corner below): clock | 3 weather cells | traffic | property.
+    CLOCK_B = 104                      # bottom of the clock band
+    W1, W2, W3 = 256, 408, 560         # the three weather-cell dividers (152px cells)
+    TRAF_B = 804                       # bottom of the traffic section
+    for yy in (CLOCK_B, W1, W2, W3, TRAF_B):
+        hr(yy)
+
+    # 1) clock (centered in y0..CLOCK_B)
+    d.text((cx, (y0 + CLOCK_B) // 2 + 4),
+           datetime.datetime.now().strftime("%a %-I:%M %p").upper(),
            font=bold(24), fill=LIGHT, anchor="mm")
 
-    # construction logo (3F badge)
-    lbox = [cx - 84, 86, cx + 84, 186]
-    clogo = load_logo(CONSTRUCTION_LOGO, lbox[2]-lbox[0], lbox[3]-lbox[1])
-    if clogo: paste_logo(ov, clogo, lbox)
-    else:     placeholder(d, lbox, "CONSTRUCTION")
-    hr(204)
-
-    # three equally-spaced stacked weather sections
-    top, bot = 222, 606
-    bh = (bot - top) / 3.0
-    centers = [top + bh * (i + 0.5) for i in range(3)]
-    hr(top + bh); hr(top + 2 * bh)
-
+    # 2) three equal weather cells
     def cell(cy, label, value, sub, subc):
         d.text((cx, cy - 50), label, font=bold(21), fill=MUTE, anchor="mm")
         d.text((cx, cy),      value, font=bold(54), fill=WHITE, anchor="mm")
-        if sub: d.text((cx, cy + 44), sub, font=bold(24), fill=subc, anchor="mm")
+        if sub: d.text((cx, cy + 46), sub, font=bold(24), fill=subc, anchor="mm")
 
+    wcenters = [(CLOCK_B + W1) // 2, (W1 + W2) // 2, (W2 + W3) // 2]
     feels = v.get("hidx") if (v["temp"] is not None and v["temp"] >= 70) else v.get("wchill")
     temp_sub = ("Feels " + fmt(feels) + "\u00b0") if feels is not None else ""
     dew_sub  = ("Dew pt " + fmt(v["dew"]) + "\u00b0") if v["dew"] is not None else ""
+    cell(wcenters[0], "TEMPERATURE", fmt(v["temp"]) + "\u00b0F", temp_sub, LIGHT)
+    cell(wcenters[1], "WIND",        fmt(v["wind"]) + " mph", compass(v["wdir"]) or "--", ACCENT_RGB)
+    cell(wcenters[2], "HUMIDITY",    fmt(v["hum"]) + "%", dew_sub, LIGHT)
 
-    cell(centers[0], "TEMPERATURE", fmt(v["temp"]) + "\u00b0F", temp_sub, LIGHT)
-    cell(centers[1], "WIND",        fmt(v["wind"]) + " mph", compass(v["wdir"]) or "--", ACCENT_RGB)
-    cell(centers[2], "HUMIDITY",    fmt(v["hum"]) + "%", dew_sub, LIGHT)
-    hr(bot)
-
-    # traffic today: per-direction daily vehicle counts (from counts.json).
-    # Resets to 0 each day (the counter rolls over at midnight in TZ).
+    # 3) traffic today: per-direction daily vehicle counts (resets at midnight in TZ)
     c = read_counts()
     by_dir = c.get("by_dir") or {}
-    d.text((cx, 636), "VEHICLES TODAY", font=bold(21), fill=MUTE, anchor="mm")
+    d.text((cx, W3 + 36), "VEHICLES TODAY", font=bold(21), fill=MUTE, anchor="mm")
 
     def dir_cell(cy, label, n):
         d.text((cx, cy), full_dir(label), font=bold(20), fill=MUTE, anchor="mm")
-        fit_line(d, f"{n:,}" if n is not None else "--", cx, cy + 36,
-                 x0 + pad, x1 - pad, FONT_BOLD, WHITE, cap=48)
+        fit_line(d, f"{n:,}" if n is not None else "--", cx, cy + 38,
+                 x0 + pad, x1 - pad, FONT_BOLD, WHITE, cap=50)
 
-    dir_cell(672, DIR_A_LABEL, by_dir.get("A"))   # near carriageway
-    dir_cell(752, DIR_B_LABEL, by_dir.get("B"))   # far carriageway
-    hr(810)
+    dir_cell(W3 + 96,  DIR_A_LABEL, by_dir.get("A"))   # near carriageway
+    dir_cell(W3 + 174, DIR_B_LABEL, by_dir.get("B"))   # far carriageway
 
-    # property brand (logo image if present, else serif wordmark) over the url
-    pbox = [cx - 100, 822, cx + 100, 946]
+    # 4) property brand (logo image if present, else serif wordmark) over the url
+    pbox = [cx - 100, TRAF_B + 16, cx + 100, y1 - 60]
     plogo = load_logo(PROPERTY_LOGO, pbox[2]-pbox[0]-16, pbox[3]-pbox[1]-12)
     if plogo: paste_logo(ov, plogo, pbox)
-    else:     wordmark(d, [x0 + pad, 828, x1 - pad, 940], PROP_BRAND)
-    d.text((cx, 1016), PROP_URL, font=bold(22), fill=ACCENT_RGB, anchor="mm")
+    else:     wordmark(d, [x0 + pad, pbox[1], x1 - pad, pbox[3]], PROP_BRAND)
+    d.text((cx, y1 - 30), PROP_URL, font=bold(22), fill=ACCENT_RGB, anchor="mm")
+
+    # construction logo (3F) -- standalone card in the bottom corner opposite the panel
+    cl_fit, cl_pad = 132, 20
+    card = cl_fit + cl_pad * 2
+    cl_y1 = 1080 - margin; cl_y0 = cl_y1 - card
+    if PANEL_SIDE == "left":
+        cl_x1 = 1920 - margin; cl_x0 = cl_x1 - card     # bottom-right
+    else:
+        cl_x0 = margin; cl_x1 = cl_x0 + card            # bottom-left
+    csh = Image.new("RGBA", (1920, 1080), (0, 0, 0, 0))
+    ImageDraw.Draw(csh).rounded_rectangle([cl_x0, cl_y0, cl_x1, cl_y1], radius=rad, fill=(0, 0, 0, 140))
+    ov.alpha_composite(csh.filter(ImageFilter.GaussianBlur(16)))
+    d.rounded_rectangle([cl_x0, cl_y0, cl_x1, cl_y1], radius=rad, fill=BAR_RGB + (BAR_ALPHA,))
+    clbox = [cl_x0 + cl_pad, cl_y0 + cl_pad, cl_x1 - cl_pad, cl_y1 - cl_pad]
+    clogo = load_logo(CONSTRUCTION_LOGO, clbox[2]-clbox[0], clbox[3]-clbox[1])
+    if clogo: paste_logo(ov, clogo, clbox)
+    else:     placeholder(d, clbox, "3F")
 
     if (WIDTH, HEIGHT) != (1920, 1080):
         ov = ov.resize((WIDTH, HEIGHT), Image.LANCZOS)

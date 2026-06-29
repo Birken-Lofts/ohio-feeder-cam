@@ -5,6 +5,7 @@
 *.key
 *.pem
 secrets/
+secret.txt
 
 # Local logo/font art (drop-in assets are environment-specific; keep placeholders only)
 assets/property_logo.png
