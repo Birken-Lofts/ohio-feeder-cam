@@ -51,13 +51,18 @@ docker compose logs -f
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Full pipeline: renders the weather overlay and re-encodes (libx264) before pushing to Restream. |
+| `docker-compose.yml` | Full pipeline: renders the overlay and re-encodes (libx264) before pushing to Restream. Also defines the `vehicle-counter` (under the `gpu` profile) and `postgres` services. |
 | `docker-compose.min.yml` | Minimal copy relay (camera → Restream, no overlay, no re-encode). For validation. |
 | `Dockerfile` | Image for the full pipeline (ffmpeg + Python + Pillow + DejaVu fonts). |
+| `Dockerfile.counter` | Prod/NVIDIA image for the vehicle counter (Ultralytics CUDA base + supervision). |
 | `overlay_render.py` | The overlay renderer — your canvas. Renders a vertical panel and streams PNG frames to ffmpeg. |
+| `vehicle_counter.py` | YOLO vehicle counter: detects + tracks + counts line crossings → SQLite + `counts.json`. |
+| `calibrate_line.py` | Helper to pick the counting line on a camera frame and print `COUNT_LINE`. |
+| `requirements-counter.txt` | Python deps for the counter (ultralytics, supervision, opencv) — dev/native install. |
 | `preview.sh` | Render one overlay frame locally on macOS (no Docker) and open it. |
 | `.env.example` | Template for all settings/credentials. Copy to `.env` (gitignored). |
 | `assets/` | Logos (`construction_logo.png`; add your own `property_logo.png`) and optional brand `.ttf` fonts. |
+| `data/` | `counts.json` snapshot + calibration frames (+ a SQLite fallback DB if no Postgres). Gitignored. Postgres data lives in the `pgdata` Docker volume. |
 
 ## Configuration (`.env`)
 
@@ -94,6 +99,34 @@ to the local station is automatic once it's installed.
 
 If neither source is configured (or both are unreachable), the panel still
 renders and shows `--` for the affected values.
+
+**Vehicle counting**
+
+| Var | Description |
+|-----|-------------|
+| `COUNT_LINE_A` | Counting line for the **near** carriageway as `x1,y1,x2,y2` in 1920×1080 space → direction A. **At least one line required** — produce it with `calibrate_line.py`. |
+| `COUNT_LINE_B` | Counting line for the **far** carriageway → direction B. Omit on an undivided road. |
+| `DIR_A_LABEL` / `DIR_B_LABEL` | Labels for the two lines/directions (e.g. `WB` / `EB`). |
+| `SITE` | Camera/site id stored on every crossing row (for multi-camera analysis later). |
+| `YOLO_MODEL` | Ultralytics model (`yolo11n.pt` for dev/MPS/CPU; `yolo11m.pt`+ on the GPU box). Auto-downloads. |
+| `DETECT_CONF` | Detection confidence threshold (default `0.3`). |
+| `DETECT_STRIDE` | Process 1 of every N frames (default `6` ≈ 5 detections/s at 30fps). |
+| `ENABLE_COLOR` | Classify dominant vehicle color (default `true`). |
+| `ENABLE_MMR` | **Experimental** make/model classifier (default `false`, off). Unreliable on a traffic cam — see caveat below. Needs `pip install transformers pillow` if turned on. |
+| `MMR_MODEL` / `MMR_MIN_PX` | Only used when `ENABLE_MMR=true`. HF model id and the min box width to bother classifying. |
+
+**Postgres (durable crossing history)**
+
+| Var | Description |
+|-----|-------------|
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials for the `postgres` compose service. |
+| `DATABASE_URL` | Counter's connection string. Native dev uses `…@localhost:5432…`; the **container overrides** it to `…@postgres:5432…` via compose. Leave blank to fall back to local SQLite (`data/counts.db`). |
+
+On a **divided road**, draw one line per carriageway — each line *is* a direction,
+which is more reliable than a single line when the carriageways carry opposite
+traffic or the road curves. If no line is set the counter exits with a hint; the
+overlay simply shows `--` for traffic until a snapshot exists, so the stream is
+unaffected either way.
 
 **Encode**
 
@@ -143,6 +176,121 @@ are cached, so a failed poll never blanks the panel.
 The full pipeline runs inside a shell loop that restarts ffmpeg after any exit
 (10s backoff), and each ffmpeg run is capped at 23h (`-t 82800`) for a
 deliberate daily recycle. A healthcheck `ffprobe`s the camera every 60s.
+
+## Vehicle counting
+
+A separate process, `vehicle_counter.py`, pulls the **same** RTSP feed and uses
+[Ultralytics YOLO](https://github.com/ultralytics/ultralytics) (detection +
+built-in ByteTrack tracking) with [Roboflow Supervision](https://github.com/roboflow/supervision)'s
+`LineZone` to count vehicles crossing a counting line. Each crossing is recorded
+with **direction** (one line per carriageway), **type** (car / truck / bus /
+motorcycle), **color**, and a full **timestamp**. It is fully decoupled from the
+encode loop, so a detector crash never touches the live feed.
+
+```
+                ┌──────────────────────────┐  writes  Postgres `crossings`  (1 row/vehicle, full history)
+ RTSP ─────────▶│ vehicle_counter.py        │────────▶ data/counts.json       (today snapshot)
+ (same camera)  │  YOLO track + LineZone +  │                 │
+                │  color + make/model       │                 │ reads
+                └──────────────────────────┘                 │
+ RTSP ─────────▶ camera-restream ── overlay_render.py ────────┘ ──▶ "TRAFFIC TODAY" on stream
+```
+
+Every crossing is written as a row to **Postgres** (the `postgres` compose
+service) for durable history/analysis, and today's totals are mirrored to
+`data/counts.json`, which the overlay reads (last-good cached, like weather).
+Today's totals are rehydrated from the DB on startup, so restarting the counter
+mid-day doesn't lose the count. The day boundary follows `TZ`. (With no
+`DATABASE_URL` set, it falls back to a local SQLite file so it still runs without
+Docker.)
+
+**`crossings` schema** — one row per vehicle, built for analysis:
+
+```sql
+-- crossings(id, ts timestamptz, local_date, local_hour, direction, direction_label,
+--           cls, color, make_model, mmr_conf, confidence, tracker_id,
+--           bbox_x, bbox_y, bbox_w, bbox_h, site)
+-- Hourly volume by direction today:
+SELECT local_hour, direction_label, count(*)
+FROM crossings WHERE local_date = to_char(now(),'YYYY-MM-DD')
+GROUP BY 1,2 ORDER BY 1;
+
+-- Color mix this week:
+SELECT color, count(*) FROM crossings
+WHERE ts > now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Connect with `psql`: `docker exec -it feedercam-postgres psql -U feedercam -d feedercam`.
+
+> **Vehicle type is COCO-coarse.** YOLO's `truck` class means *large commercial
+> trucks*; **pickups (F-150/F-450) are labeled `car`** by COCO-trained models.
+> That's expected behavior, not a bug. Distinguishing pickups would need a
+> body-type classifier or a detector trained on a richer taxonomy.
+>
+> **Make/model is off by default** (`ENABLE_MMR=false`). The only open option
+> (Stanford-Cars ViT) is trained on clean ~2012 catalog photos and is unreliable
+> on a moving traffic cam — the `make_model`/`mmr_conf` columns exist but stay
+> `NULL`. Reliable make/model needs a commercial recognition service. Color is
+> reliable for near lanes, weaker for distant ones.
+
+### Two deployments
+
+The Mac dev box and the prod GPU box run the **same script**; the device
+(`cuda` → `mps` → `cpu`) is auto-detected. Both write to Postgres and share the
+repo-local `./data/` directory (how counts reach the overlay).
+
+**Dev — Apple Silicon (native, MPS).** Docker can't reach the Mac GPU, so run the
+counter natively, but start Postgres in Docker first:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements-counter.txt
+docker compose up -d postgres             # DB the native counter writes to (localhost:5432)
+.venv/bin/python calibrate_line.py        # draw a line per carriageway; writes COUNT_LINE_A/B to .env
+.venv/bin/python vehicle_counter.py        # logs device=mps, db=pg; writes Postgres + counts.json
+```
+
+**Prod — NVIDIA (Docker, CUDA).** Everything runs in Docker, including the
+GPU-accelerated counter — see **[Production deploy](#production-deploy-server-with-nvidia-gpu)** below.
+
+## Production deploy (server with NVIDIA GPU)
+
+On the prod box, all three services run in Docker and the counter uses the GPU
+(the counter auto-detects `cuda`; the `ultralytics/ultralytics` base image is
+CUDA-enabled). All services use `restart: unless-stopped`, so they come back on
+reboot (ensure Docker starts on boot: `sudo systemctl enable docker`).
+
+**One-time host setup (Docker can't do this for you):**
+
+1. Install the NVIDIA driver for the GPU.
+2. Install the **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)** and restart Docker. Verify GPU-in-Docker works *before* deploying:
+
+   ```bash
+   docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi   # must list the GPU
+   ```
+
+   Without the toolkit, startup fails with *"could not select device driver nvidia with capabilities: [[gpu]]"*.
+
+**Deploy:**
+
+```bash
+git clone <repo> && cd <repo>
+cp .env.example .env && chmod 600 .env     # then fill in real values
+# (copy your calibrated COUNT_LINE_A/B over too — no GUI/recalibration on the server)
+
+docker compose --profile gpu up -d --build   # starts postgres + camera-restream + vehicle-counter
+docker compose logs -f vehicle-counter        # expect: device=cuda model=... db=pg mmr=off
+```
+
+> Tip: set `COMPOSE_PROFILES=gpu` in the server's `.env` (see `.env.example`) and a
+> plain `docker compose up -d` then starts the whole stack — convenient for ops.
+
+**Notes:**
+
+- **Network:** the server must reach the camera over RTSP (`CAM_IP`) — verify from the server.
+- **Restream key:** use the channel's **persistent** RTMP key, not an `_event` key, for a 24/7 feed.
+- **Model weights** persist in the `weights` Docker volume (downloaded once). On the GPU you can raise accuracy with `YOLO_MODEL=yolo11m.pt` and `DETECT_STRIDE=3`.
+- **Postgres data** persists in the `pgdata` volume across restarts/recreates.
+- The `camera-restream` container picks up `counts.json` automatically via the shared `./data` mount — no restart needed when counts update.
 
 ## Operations
 

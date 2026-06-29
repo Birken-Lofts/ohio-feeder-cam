@@ -1,0 +1,10 @@
+# Vehicle counter deps (NOT installed in the lean streaming image).
+# Dev (Apple Silicon): pip install -r requirements-counter.txt into .venv.
+# Prod (NVIDIA): baked into Dockerfile.counter via the ultralytics CUDA image.
+ultralytics>=8.3.0      # YOLO detection + built-in ByteTrack tracking
+supervision>=0.26.0     # LineZone direction-aware line-crossing counter
+opencv-python>=4.9.0    # RTSP capture + calibration UI + color classification
+psycopg[binary]>=3.1    # Postgres driver (per-crossing durable history)
+# Optional: only needed if you set ENABLE_MMR=true (experimental make/model).
+# Left out by default -- the counter degrades gracefully if they're absent.
+#   pip install "transformers>=4.40" "pillow>=10.0"

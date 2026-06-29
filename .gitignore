@@ -23,3 +23,7 @@ __pycache__/
 .venv/
 venv/
 preview.png
+
+# Vehicle counter: local DB, snapshots, calibration frames, model weights
+data/
+*.pt

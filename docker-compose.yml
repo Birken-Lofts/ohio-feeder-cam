@@ -9,6 +9,7 @@ services:
     volumes:
       - ./overlay_render.py:/app/overlay_render.py:ro
       - ./assets:/app/assets:ro
+      - ./data:/app/data:ro          # reads counts.json written by vehicle-counter
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -42,3 +43,72 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Vehicle counter (YOLO). PROD/NVIDIA only -- gated behind the "gpu" profile so
+  # a plain `docker compose up` (e.g. on the Mac) does NOT start it. Bring it up on
+  # the GPU box with:  docker compose --profile gpu up -d --build vehicle-counter
+  # On the dev Mac, run vehicle_counter.py natively instead (uses MPS).
+  vehicle-counter:
+    build:
+      context: .
+      dockerfile: Dockerfile.counter
+    container_name: vehicle-counter
+    restart: unless-stopped
+    profiles: ["gpu"]
+    env_file: .env
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      # Override the .env DATABASE_URL (which targets localhost for native dev)
+      # to reach the postgres service by name from inside the compose network.
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-feedercam}:${POSTGRES_PASSWORD:-feedercam}@postgres:5432/${POSTGRES_DB:-feedercam}
+      - WEIGHTS_DIR=/app/weights     # YOLO weights persist in the `weights` volume
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./vehicle_counter.py:/app/vehicle_counter.py:ro
+      - ./data:/app/data             # writes counts.json (shared w/ streamer)
+      - weights:/app/weights         # cached model weights (no re-download on recreate)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Postgres durable store for per-vehicle crossing history. No profile, so it
+  # starts with the default stack in prod; on the dev Mac start just this one:
+  #   docker compose up -d postgres
+  # and run vehicle_counter.py natively (it connects via DATABASE_URL on localhost).
+  postgres:
+    image: postgres:16
+    container_name: feedercam-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-feedercam}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-feedercam}
+      POSTGRES_DB: ${POSTGRES_DB:-feedercam}
+    ports:
+      - "5432:5432"                  # exposed so the native dev counter can connect
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-feedercam} -d ${POSTGRES_DB:-feedercam}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  weights:

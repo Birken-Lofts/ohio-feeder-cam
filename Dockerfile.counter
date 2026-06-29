@@ -1,0 +1,17 @@
+# Prod (NVIDIA GPU) image for vehicle_counter.py.
+#
+# The official Ultralytics image ships CUDA + PyTorch + OpenCV + ultralytics, so
+# we only add supervision on top. Use this on the GPU box; on the Apple Silicon
+# dev Mac, run vehicle_counter.py natively in .venv instead (Docker can't reach
+# the Mac GPU). For a CPU-only host, swap the base for ultralytics/ultralytics:latest-cpu.
+FROM ultralytics/ultralytics:latest
+
+# Base image already ships torch + opencv + ultralytics + pillow; add the rest.
+# (transformers is intentionally omitted -- make/model is disabled by default.)
+RUN pip install --no-cache-dir \
+        "supervision>=0.26.0" \
+        "psycopg[binary]>=3.1"
+
+WORKDIR /app
+# vehicle_counter.py and ./data are bind-mounted at runtime by docker-compose.
+CMD ["python3", "/app/vehicle_counter.py"]
